@@ -6,13 +6,15 @@ namespace Oxide.Plugins
     using UnityEngine;
     //using Oxide.Plugins.LandClaimExtensionMethods;
     using System;
+    using System.Linq;
 
     [Info("Land Claim", "SenZen", "0.1.2")]
     [Description("Allows Land Claim and Management")]
     public partial class LandClaim : RustPlugin
     {
         #region Configuration
-        private const uint INITIAL_TEAM_ALLOWANCE = 5;
+        private const uint INITIAL_TEAM_ALLOWANCE = 2;
+        private const bool REQUIRE_CONTIGUOUS = true;
         private MapGrid map = new MapGrid();
         #endregion
 
@@ -62,11 +64,72 @@ namespace Oxide.Plugins
                 player.IPlayer.Reply("Another team already owns this parcel.");
                 return false;
             }
+            if (REQUIRE_CONTIGUOUS && teamParcels[player.currentTeam].Count > 0)
+            {
+                bool isContiguous = false;
+                foreach (Vector2 parcelToCheckAgainst in teamParcels[player.currentTeam].ToList())
+                {
+                    Puts($"Checking contiguity with parcel {parcelToCheckAgainst.ToString()}.");
+                    float deltaX = Mathf.Abs(parcelToCheckAgainst.x - parcel.x);
+                    float deltaY = Mathf.Abs(parcelToCheckAgainst.y - parcel.y);
+                    Puts($"dX = {deltaX}");
+                    Puts($"dY = {deltaY}");
+                    isContiguous = (
+                        deltaX < 2 &&
+                        deltaY < 2 &&
+                        deltaX + deltaY == 1
+                    );
+                    if (isContiguous)
+                    {
+                        break;
+                    }
+                }
+                Puts($"isContiguous: {isContiguous}");
+                if (!isContiguous)
+                {
+                    player.IPlayer.Reply("Must be adjacent to another parcel your team owns.");
+                    return false;
+                }
+            }
             // Claim parcel for player's team
             parcelOwner[parcel] = player.currentTeam;
             teamParcels[player.currentTeam].Add(parcel);
             teamParcelAllowance[player.currentTeam] -= 1;
             player.IPlayer.Reply("Parcel successfully claimed!");
+            player.IPlayer.Reply($"Your team may claim {teamParcelAllowance[player.currentTeam]} more parcels.");
+            return true;
+        }
+
+        private bool TryReleaseParcel(Vector2 parcel, BasePlayer player)
+        {
+            if (player.currentTeam == 0)
+            {
+                player.IPlayer.Reply("Must be in a Team to claim parcels.");
+                return false;
+            }
+            if (parcelOwner[parcel] == 0)
+            {
+                player.IPlayer.Reply("This parcel is unclaimed.");
+                if (teamParcelAllowance[player.currentTeam] > 0)
+                {
+                    player.IPlayer.Reply("Use `/claim here` to claim this parcel.");
+                }
+                return false;
+            }
+            if (parcelOwner[parcel] > 0 && parcelOwner[parcel] != player.currentTeam)
+            {
+                player.IPlayer.Reply("Your team does not own this parcel.");
+                return false;
+            }
+            // Release parcel for player's team
+            parcelOwner[parcel] = 0;
+            teamParcels[player.currentTeam].Remove(parcel);
+            teamParcelAllowance[player.currentTeam] += 1;
+            if (teamParcelAllowance[player.currentTeam] > INITIAL_TEAM_ALLOWANCE)
+            {
+                teamParcelAllowance[player.currentTeam] = INITIAL_TEAM_ALLOWANCE;
+            }
+            player.IPlayer.Reply("Parcel successfully released!");
             player.IPlayer.Reply($"Your team may claim {teamParcelAllowance[player.currentTeam]} more parcels.");
             return true;
         }
@@ -91,14 +154,6 @@ namespace Oxide.Plugins
             }
         }
 
-        /*
-         * TODOs
-         * Team disband - no members left in team to own parcels
-         * Only teams can claim parcels
-         * Parcel Limits
-         * Contiguous Parcels
-        */
-
 
         #region Command Handling
         object OnPlayerCommand(BasePlayer player, string command, string[] args)
@@ -108,18 +163,19 @@ namespace Oxide.Plugins
             if (player == null) return null;
             if (command != "claim") return null;
 
+            Vector2 parcel = map.ParcelForCoordinates(player.transform.position);
             string action = args.Length == 0 ? "here" : args[0];
             switch (action)
             {
                 case "here":
                     Puts("Claiming Parcel");
-                    Vector2 parcel = map.ParcelForCoordinates(player.transform.position);
                     TryClaimParcel(parcel, player);
                     returnValue = 1;
                     break;
 
                 case "release":
                     Puts("Releasing Parcel");
+                    TryReleaseParcel(parcel, player);
                     returnValue = 1;
                     break;
 
@@ -142,15 +198,25 @@ namespace Oxide.Plugins
         #region Hooks
         object CanBuild(Planner planner, Construction prefab, Construction.Target target)
         {
-            Puts("CanBuild works!");
+            BasePlayer player = planner.GetOwnerPlayer();
+            Vector2 parcel = map.ParcelForCoordinates(player.transform.position);
             // Check if part of a team
+            if (player.currentTeam == 0)
+            {
+                player.IPlayer.Reply("Must be in a team to claim parcels and build.");
+                return false;
+            }
             // Check if team owns parcel
+            if (parcelOwner[parcel] != player.currentTeam)
+            {
+                player.IPlayer.Reply("Your team does not own this parcel.");
+                return false;
+            }
             return null;
         }
 
         object OnTeamCreated(BasePlayer player)
         {
-            Puts("OnTeamCreated!");
             teamParcels[player.currentTeam] = new HashSet<Vector2>();
             teamParcelAllowance[player.currentTeam] = INITIAL_TEAM_ALLOWANCE;
             player.IPlayer.Reply($"Your new team may claim up to {teamParcelAllowance[player.currentTeam]} parcels");
@@ -159,10 +225,11 @@ namespace Oxide.Plugins
 
         void OnTeamDisbanded(RelationshipManager.PlayerTeam team)
         {
-            Puts("OnTeamDisbanded!");
             teamParcelAllowance[team.teamID] = 0;
-            teamParcels[team.teamID].Clear();
-            // TODO: Remove all parcels
+            if (teamParcels[team.teamID] != null)
+            {
+                teamParcels[team.teamID].Clear();
+            }
         }
         #endregion
     }
