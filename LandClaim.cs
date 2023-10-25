@@ -40,6 +40,8 @@ namespace Oxide.Plugins
             }
         }
 
+
+        #region Command Handlers
         private bool TryClaimParcel(Vector2 parcel, BasePlayer player)
         {
             // Check invalid claims
@@ -69,11 +71,8 @@ namespace Oxide.Plugins
                 bool isContiguous = false;
                 foreach (Vector2 parcelToCheckAgainst in teamParcels[player.currentTeam].ToList())
                 {
-                    Puts($"Checking contiguity with parcel {parcelToCheckAgainst.ToString()}.");
                     float deltaX = Mathf.Abs(parcelToCheckAgainst.x - parcel.x);
                     float deltaY = Mathf.Abs(parcelToCheckAgainst.y - parcel.y);
-                    Puts($"dX = {deltaX}");
-                    Puts($"dY = {deltaY}");
                     isContiguous = (
                         deltaX < 2 &&
                         deltaY < 2 &&
@@ -84,7 +83,6 @@ namespace Oxide.Plugins
                         break;
                     }
                 }
-                Puts($"isContiguous: {isContiguous}");
                 if (!isContiguous)
                 {
                     player.IPlayer.Reply("Must be adjacent to another parcel your team owns.");
@@ -154,8 +152,48 @@ namespace Oxide.Plugins
             }
         }
 
+        private void DrawParcelCube(BasePlayer player, Vector2 parcel)
+        {
+            Vector3 origin = map.ParcelToWorldSpace(parcel);
+            float time = 10f;
+            float height = 75f;
 
-        #region Command Handling
+            Vector3 point1 = origin;
+            Vector3 point2 = new Vector3(origin.x + MapGrid.GRID_CELL_SIZE, origin.y, origin.z);
+            Vector3 point3 = new Vector3(origin.x + MapGrid.GRID_CELL_SIZE, origin.y, origin.z + MapGrid.GRID_CELL_SIZE);
+            Vector3 point4 = new Vector3(origin.x, origin.y, origin.z + MapGrid.GRID_CELL_SIZE);
+
+            Vector3 point5 = new Vector3(origin.x, origin.y + height, origin.z);
+            Vector3 point6 = new Vector3(origin.x + MapGrid.GRID_CELL_SIZE, origin.y + height, origin.z);
+            Vector3 point7 = new Vector3(origin.x + MapGrid.GRID_CELL_SIZE, origin.y + height, origin.z + MapGrid.GRID_CELL_SIZE);
+            Vector3 point8 = new Vector3(origin.x, origin.y + height, origin.z + MapGrid.GRID_CELL_SIZE);
+
+            player.SendConsoleCommand("ddraw.line", time, Color.green, point1, point2);
+            player.SendConsoleCommand("ddraw.line", time, Color.green, point2, point3);
+            player.SendConsoleCommand("ddraw.line", time, Color.green, point3, point4);
+            player.SendConsoleCommand("ddraw.line", time, Color.green, point4, point1);
+
+            player.SendConsoleCommand("ddraw.line", time, Color.green, point1, point5);
+            player.SendConsoleCommand("ddraw.line", time, Color.green, point2, point6);
+            player.SendConsoleCommand("ddraw.line", time, Color.green, point3, point7);
+            player.SendConsoleCommand("ddraw.line", time, Color.green, point4, point8);
+
+            player.SendConsoleCommand("ddraw.line", time, Color.green, point5, point6);
+            player.SendConsoleCommand("ddraw.line", time, Color.green, point6, point7);
+            player.SendConsoleCommand("ddraw.line", time, Color.green, point7, point8);
+            player.SendConsoleCommand("ddraw.line", time, Color.green, point8, point5);
+        }
+
+        private void DrawTeamParcels(BasePlayer player)
+        {
+            foreach (Vector2 parcel in teamParcels[player.currentTeam].ToList())
+            {
+                DrawParcelCube(player, parcel);
+            }
+        }
+        #endregion
+
+        #region Hooks
         object OnPlayerCommand(BasePlayer player, string command, string[] args)
         {
             object returnValue = null;
@@ -185,6 +223,12 @@ namespace Oxide.Plugins
                     returnValue = 1;
                     break;
 
+                case "show":
+                    Puts("Showing Team Claims");
+                    DrawTeamParcels(player);
+                    returnValue = 1;
+                    break;
+
                 default:
                     returnValue = null;
                     break;
@@ -192,10 +236,7 @@ namespace Oxide.Plugins
 
             return returnValue;
         }
-        #endregion
 
-
-        #region Hooks
         object CanBuild(Planner planner, Construction prefab, Construction.Target target)
         {
             BasePlayer player = planner.GetOwnerPlayer();
@@ -243,7 +284,7 @@ namespace Oxide.Plugins
 
     public class MapGrid
     {
-        private const float GRID_CELL_SIZE = 146.3f;
+        public static readonly float GRID_CELL_SIZE = 146.3f;
         public float Size { get; private set; }
         public float Width { get; private set; }
         public float Height { get; private set; }
@@ -268,41 +309,25 @@ namespace Oxide.Plugins
             );
             return cell;
         }
+
+        public Vector3 ParcelToWorldSpace(Vector2 parcel)
+        {
+            Vector3 worldSpace = new Vector3(
+                (parcel.x * GRID_CELL_SIZE) - Offset,
+                0,
+                (parcel.y * GRID_CELL_SIZE) - Offset
+            );
+            Console.WriteLine($"Parcel: {parcel}\nWorldSpace: {worldSpace}");
+            return worldSpace;
+        }
     }
 }
 
 
-namespace Oxide.Plugins.LandClaimExtensionMethods
-{
-    public static class ExtensionMethods
-    {
-    }
-}
-
-
-        //private void DrawWorldGrid(BasePlayer player)
-        //{
-        //    Puts($"Drawing World Grid");
-        //    float time = 15f;
-
-        //    Vector3 origin = new Vector3(MapOrigin, 100f, MapOrigin);
-        //    // TODO
-        //}
-
-        //private void DrawPrarcelCube(BasePlayer player, Vector3 origin)
-        //{
-        //    Puts($"Drawing Parcel Cube @ {origin}");
-        //    float time = 15f;
-
-        //    Vector3 point1 = origin;
-        //    Vector3 point2 = new Vector3(origin.x + CellLength, origin.y, origin.z);
-        //    Vector3 point3 = new Vector3(origin.x + CellLength, origin.y, origin.z + CellLength);
-        //    Vector3 point4 = new Vector3(origin.x, origin.y, origin.z + CellLength);
-
-        //    player.SendConsoleCommand("ddraw.line", time, Color.blue, point1, point2);
-        //    player.SendConsoleCommand("ddraw.line", time, Color.blue, point2, point3);
-        //    player.SendConsoleCommand("ddraw.line", time, Color.blue, point3, point4);
-        //    player.SendConsoleCommand("ddraw.line", time, Color.blue, point4, point1);
-        //}
-
+//namespace Oxide.Plugins.LandClaimExtensionMethods
+//{
+//    public static class ExtensionMethods
+//    {
+//    }
+//}
 
