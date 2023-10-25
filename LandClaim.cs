@@ -146,17 +146,19 @@ namespace Oxide.Plugins
             }
             // Iterate over team's parcels
             player.IPlayer.Reply("Your team owns the following parcels:");
+            List<string> parcels = new List<string>();
             foreach (Vector2 parcel in teamParcels[player.currentTeam])
             {
-                player.IPlayer.Reply(parcel.ToString());
+                parcels.Add(map.ParcelID(parcel));
             }
+            player.IPlayer.Reply(String.Join(", ", parcels.ToArray()));
         }
 
         private void DrawParcelCube(BasePlayer player, Vector2 parcel)
         {
             Vector3 origin = map.ParcelToWorldSpace(parcel);
             float time = 10f;
-            float height = 75f;
+            float height = 100f;
 
             Vector3 point1 = origin;
             Vector3 point2 = new Vector3(origin.x + MapGrid.GRID_CELL_SIZE, origin.y, origin.z);
@@ -280,16 +282,21 @@ namespace Oxide.Plugins
 namespace Oxide.Plugins
 {
     using System;
+    using System.Text.RegularExpressions;
     using UnityEngine;
 
     public class MapGrid
     {
+        // Rust doesn't consistently calculate width/height for maps so
+        // we have to manually specify the number of rows...
+        private const uint GRID_ROWS = 30;
         public static readonly float GRID_CELL_SIZE = 146.3f;
         public float Size { get; private set; }
         public float Width { get; private set; }
         public float Height { get; private set; }
         public float Origin { get; private set; }
         public float Offset { get; private set; }
+
 
         public MapGrid()
         {
@@ -319,6 +326,27 @@ namespace Oxide.Plugins
             );
             Console.WriteLine($"Parcel: {parcel}\nWorldSpace: {worldSpace}");
             return worldSpace;
+        }
+
+        public string ParcelID(Vector2 parcel)
+        {
+            // Calculate Alpha
+            const string ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            string parcelAlpha = "";
+            int x = (int)parcel.x;
+
+             while (x >= 0)
+            {
+                int index = x % 26;
+                char character = ALPHABET[index];
+                parcelAlpha = character + parcelAlpha;
+                if (x < 26) break;
+                x = (x - index) / 26 - 1;
+            }
+
+            uint parcelNum = GRID_ROWS - (uint)parcel.y - 1;
+            string parcelAlphaNum = $"{parcelAlpha}{parcelNum}";
+            return parcelAlphaNum;
         }
     }
 }
