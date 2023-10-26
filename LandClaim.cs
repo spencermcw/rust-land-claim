@@ -7,6 +7,8 @@ namespace Oxide.Plugins
     //using Oxide.Plugins.LandClaimExtensionMethods;
     using System;
     using System.Linq;
+    using Oxide.Core.Configuration;
+    using Oxide.Core;
 
     [Info("Land Claim", "SenZen", "0.1.2")]
     [Description("Allows Land Claim and Management")]
@@ -19,30 +21,47 @@ namespace Oxide.Plugins
         #endregion
 
         #region Data
-        private Hash<Vector2, ulong> parcelOwner = new Hash<Vector2, ulong>();
-        private Hash<ulong, HashSet<Vector2>> teamParcels = new Hash<ulong, HashSet<Vector2>>();
+        private Hash<Parcel, ulong> parcelOwner = new Hash<Parcel, ulong>();
+        private Hash<ulong, HashSet<Parcel>> teamParcels = new Hash<ulong, HashSet<Parcel>>();
         private Hash<ulong, uint> teamParcelAllowance = new Hash<ulong, uint>();
         #endregion
 
         private void Init()
         {
             // Initialize teamParcels
-            teamParcels.Add(0, new HashSet<Vector2>());
+            teamParcels.Add(0, new HashSet<Parcel>());
             // Initialize Parcels
-            for (uint x = 0; x < map.Width; x++)
+            // Width seems to consistenly be 1 larger than height?
+            // Thank Facepunch's janky map UI generation...
+            for (uint x = 0; x < MapGrid.GridHeight() + 1; x++)
             {
-                for (uint z = 0; z < map.Height; z++)
+                for (uint z = 0; z < MapGrid.GridHeight(); z++)
                 {
-                    Vector2 parcel = new Vector2(x, z);
+                    Parcel parcel = new Parcel(x, z);
                     parcelOwner[parcel] = 0;
                     teamParcels[0].Add(parcel);
                 }
             }
+            SaveData();
+        }
+
+        private void SaveData()
+        {
+            DynamicConfigFile dataFile = Interface.Oxide.DataFileSystem.GetDatafile("LandClaim");
+            foreach(ulong team in teamParcels.Keys)
+            {
+                dataFile["teamParcels", team.ToString()] = String.Join(", ", teamParcels[team].ToArray());
+            }
+            dataFile.Save();
+        }
+
+        private void LoadData()
+        {
         }
 
 
         #region Command Handlers
-        private bool TryClaimParcel(Vector2 parcel, BasePlayer player)
+        private bool TryClaimParcel(Parcel parcel, BasePlayer player)
         {
             // Check invalid claims
             if (player.currentTeam == 0)
@@ -69,10 +88,10 @@ namespace Oxide.Plugins
             if (REQUIRE_CONTIGUOUS && teamParcels[player.currentTeam].Count > 0)
             {
                 bool isContiguous = false;
-                foreach (Vector2 parcelToCheckAgainst in teamParcels[player.currentTeam].ToList())
+                foreach (Parcel parcelToCheckAgainst in teamParcels[player.currentTeam].ToList())
                 {
-                    float deltaX = Mathf.Abs(parcelToCheckAgainst.x - parcel.x);
-                    float deltaY = Mathf.Abs(parcelToCheckAgainst.y - parcel.y);
+                    float deltaX = Mathf.Abs(parcelToCheckAgainst.X - parcel.X);
+                    float deltaY = Mathf.Abs(parcelToCheckAgainst.Z - parcel.Z);
                     isContiguous = (
                         deltaX < 2 &&
                         deltaY < 2 &&
@@ -98,7 +117,7 @@ namespace Oxide.Plugins
             return true;
         }
 
-        private bool TryReleaseParcel(Vector2 parcel, BasePlayer player)
+        private bool TryReleaseParcel(Parcel parcel, BasePlayer player)
         {
             if (player.currentTeam == 0)
             {
@@ -147,14 +166,14 @@ namespace Oxide.Plugins
             // Iterate over team's parcels
             player.IPlayer.Reply("Your team owns the following parcels:");
             List<string> parcels = new List<string>();
-            foreach (Vector2 parcel in teamParcels[player.currentTeam])
+            foreach (Parcel parcel in teamParcels[player.currentTeam])
             {
-                parcels.Add(map.ParcelID(parcel));
+                parcels.Add(map.IDForParcel(parcel));
             }
             player.IPlayer.Reply(String.Join(", ", parcels.ToArray()));
         }
 
-        private void DrawParcelCube(BasePlayer player, Vector2 parcel)
+        private void DrawParcelCube(BasePlayer player, Parcel parcel)
         {
             Vector3 origin = map.ParcelToWorldSpace(parcel);
             float time = 10f;
@@ -188,7 +207,7 @@ namespace Oxide.Plugins
 
         private void DrawTeamParcels(BasePlayer player)
         {
-            foreach (Vector2 parcel in teamParcels[player.currentTeam].ToList())
+            foreach (Parcel parcel in teamParcels[player.currentTeam].ToList())
             {
                 DrawParcelCube(player, parcel);
             }
@@ -203,7 +222,7 @@ namespace Oxide.Plugins
             if (player == null) return null;
             if (command != "claim") return null;
 
-            Vector2 parcel = map.ParcelForCoordinates(player.transform.position);
+            Parcel parcel = map.ParcelForLocation(player.transform.position);
             string action = args.Length == 0 ? "here" : args[0];
             switch (action)
             {
@@ -242,7 +261,7 @@ namespace Oxide.Plugins
         object CanBuild(Planner planner, Construction prefab, Construction.Target target)
         {
             BasePlayer player = planner.GetOwnerPlayer();
-            Vector2 parcel = map.ParcelForCoordinates(player.transform.position);
+            Parcel parcel = map.ParcelForLocation(player.transform.position);
             // Check if part of a team
             if (player.currentTeam == 0)
             {
@@ -260,7 +279,7 @@ namespace Oxide.Plugins
 
         object OnTeamCreated(BasePlayer player)
         {
-            teamParcels[player.currentTeam] = new HashSet<Vector2>();
+            teamParcels[player.currentTeam] = new HashSet<Parcel>();
             teamParcelAllowance[player.currentTeam] = INITIAL_TEAM_ALLOWANCE;
             player.IPlayer.Reply($"Your new team may claim up to {teamParcelAllowance[player.currentTeam]} parcels");
             return null;
@@ -285,77 +304,110 @@ namespace Oxide.Plugins
     using System.Text.RegularExpressions;
     using UnityEngine;
 
+    public struct Parcel
+    {
+        public Parcel(uint x, uint z)
+        {
+            X = x;
+            Z = z;
+            IDAlpha = MapGrid.NumToAlpha((int)X);
+            IDNum = MapGrid.GridHeight() - Z - 1;
+        }
+        public uint X { get; private set; }
+        public uint Z { get; private set; }
+        public string IDAlpha { get; private set; }
+        public uint IDNum { get; private set; }
+        public string ID()
+        {
+            return $"{IDAlpha}{IDNum}";
+        }
+    }
+
     public class MapGrid
     {
-        // Rust doesn't consistently calculate width/height for maps so
-        // we have to manually specify the number of rows...
-        private const uint GRID_ROWS = 30;
         public static readonly float GRID_CELL_SIZE = 146.3f;
         public float Size { get; private set; }
-        public float Width { get; private set; }
-        public float Height { get; private set; }
         public float Origin { get; private set; }
         public float Offset { get; private set; }
 
+        public static uint GridHeight()
+        {
+            return (uint)Mathf.FloorToInt(TerrainMeta.Size.z / GRID_CELL_SIZE);
+        }
 
         public MapGrid()
         {
             Size = TerrainMeta.Size.x;
             Offset = TerrainMeta.Size.x / 2;
-            Width = Mathf.Ceil(TerrainMeta.Size.x / GRID_CELL_SIZE);
-            Height = Mathf.Ceil(TerrainMeta.Size.z / GRID_CELL_SIZE);
         }
 
-        public Vector2 ParcelForCoordinates(Vector3 coordinates)
+        public Parcel ParcelForLocation(Vector3 location)
         {
             Vector3 normalizationOffset = new Vector3(Offset, 0, Offset);
-            Vector3 normalizedCoordinates = coordinates + normalizationOffset;
-            Vector2 cell = new Vector2(
-                Mathf.Floor(normalizedCoordinates.x / GRID_CELL_SIZE),
-                Mathf.Floor(normalizedCoordinates.z / GRID_CELL_SIZE)
+            Vector3 normalizedCoordinates = location + normalizationOffset;
+            Parcel cell = new Parcel(
+                (uint)Mathf.Floor(normalizedCoordinates.x / GRID_CELL_SIZE),
+                (uint)Mathf.Floor(normalizedCoordinates.z / GRID_CELL_SIZE)
             );
             return cell;
         }
 
-        public Vector3 ParcelToWorldSpace(Vector2 parcel)
+        public Vector3 ParcelToWorldSpace(Parcel parcel)
         {
             Vector3 worldSpace = new Vector3(
-                (parcel.x * GRID_CELL_SIZE) - Offset,
+                (parcel.X * GRID_CELL_SIZE) - Offset,
                 0,
-                (parcel.y * GRID_CELL_SIZE) - Offset
+                (parcel.Z * GRID_CELL_SIZE) - Offset
             );
-            Console.WriteLine($"Parcel: {parcel}\nWorldSpace: {worldSpace}");
             return worldSpace;
         }
 
-        public string ParcelID(Vector2 parcel)
+        public Parcel ParcelForID(string ID)
         {
-            // Calculate Alpha
-            const string ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-            string parcelAlpha = "";
-            int x = (int)parcel.x;
+            Regex rx = new Regex(@"([A-Z]+)(\d+)");
+            MatchCollection matches = rx.Matches(ID);
+            string alpha = matches[0].Groups[1].Value;
+            int num = Convert.ToInt32(matches[0].Groups[2].Value);
+            Parcel parcel = new Parcel((uint)AlphaToNum(alpha), (uint)(GridHeight() - num - 1));
+            return parcel;
+        }
 
-             while (x >= 0)
-            {
-                int index = x % 26;
-                char character = ALPHABET[index];
-                parcelAlpha = character + parcelAlpha;
-                if (x < 26) break;
-                x = (x - index) / 26 - 1;
-            }
-
-            uint parcelNum = GRID_ROWS - (uint)parcel.y - 1;
+        public string IDForParcel(Parcel parcel)
+        {
+            string parcelAlpha = NumToAlpha((int)parcel.X);
+            uint parcelNum = GridHeight() - (uint)parcel.Z - 1;
             string parcelAlphaNum = $"{parcelAlpha}{parcelNum}";
             return parcelAlphaNum;
         }
+
+        public static string NumToAlpha(int num)
+        {
+            const string ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            string alpha = "";
+            int _num = num;
+            while (_num >= 0)
+            {
+                int index = _num % 26;
+                char character = ALPHABET[index];
+                alpha = character + alpha;
+                if (_num < 26) break;
+                _num = (_num - index) / 26 - 1;
+            }
+            return alpha;
+        }
+
+        public static int AlphaToNum(string alpha)
+        {
+            const string ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+            int num = 0;
+            for (int i = 0; i < alpha.Length; i++)
+            {
+                int idx = ALPHABET.IndexOf(alpha[i]);
+                int exp = alpha.Length - 1 - i;
+                num += idx + (exp * ALPHABET.Length);
+            }
+            return num;
+        }
     }
 }
-
-
-//namespace Oxide.Plugins.LandClaimExtensionMethods
-//{
-//    public static class ExtensionMethods
-//    {
-//    }
-//}
 
